@@ -9,14 +9,14 @@ use serde::Deserialize;
 pub struct User {
     pub name: String,
     pub userid: String,
+    // #[serde(untagged)]
 }
 impl User {
     fn new(name: String) -> User {
-        let user = User {
-            name: name,
+        User {
+            name,
             userid: nanoid!(),
-        };
-        return user;
+        }
     }
 }
 #[derive(Clone)]
@@ -29,10 +29,12 @@ impl Users {
             users_map: Arc::new(DashMap::new()),
         }
     }
-    pub fn add_new_user(&self, name: String) -> User {
+    pub fn add_new_user(&self, name: String) {
         let user = User::new(name);
         let user_id = user.userid.clone();
         self.users_map.insert(user_id, user.clone());
-        return user;
+    }
+    pub fn getuser(&self, userid: &str) -> Option<User> {
+        self.users_map.get(userid).map(|u| u.clone())
     }
 }
