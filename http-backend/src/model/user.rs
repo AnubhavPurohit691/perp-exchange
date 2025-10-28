@@ -35,8 +35,7 @@ impl Users {
         self.users.insert(user.userid.clone(), user.clone());
         user
     }
-    pub fn getuser(&self, userid: &str) -> &User {
-        let user = self.users.get(userid).unwrap();
-        user
+    pub fn getuser(&self, userid: &str) -> Option<&User> {
+        self.users.get(userid)
     }
 }

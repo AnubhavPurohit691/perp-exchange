@@ -5,6 +5,8 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+
+use crate::model::{Trade, Trades, trades};
 #[derive(Clone, Copy)]
 pub enum Ordertype {
     Buy,
@@ -81,10 +83,105 @@ impl OrderBook {
                     .push_back(order);
             }
             Ordertype::Sell => self
-                .bid
+                .ask
                 .entry(price)
                 .or_insert_with(VecDeque::new)
                 .push_back(order),
+        }
+    }
+    pub fn matching_engine(&mut self, price: Decimal, order: Order, trades: &mut Trades) {
+        let mut remaining_quantity = order.quantity;
+        let mut to_remove = vec![];
+        match order.ordertype {
+            Ordertype::Buy => {
+                for (&sellprice, sellorders) in &mut self.ask {
+                    if sellprice > order.price {
+                        break;
+                    }
+                    if remaining_quantity <= Decimal::ZERO {
+                        break;
+                    }
+                    for sellorder in sellorders.iter_mut() {
+                        if remaining_quantity <= Decimal::ZERO {
+                            break;
+                        }
+                        let trade_quantity = remaining_quantity.min(sellorder.quantity);
+                        remaining_quantity -= trade_quantity;
+                        sellorder.quantity -= trade_quantity;
+                        let tradeprice = sellprice;
+                        let trade = Trade::new(
+                            tradeprice,
+                            trade_quantity,
+                            order.userid.clone(),
+                            sellorder.userid.clone(),
+                        );
+                        trades.add_new_trades(trade);
+                    }
+                    sellorders.retain(|o| o.quantity > Decimal::ZERO);
+                    if sellorders.is_empty() {
+                        to_remove.push(sellprice);
+                    }
+                }
+                for p in to_remove {
+                    self.ask.remove(&p);
+                }
+                if remaining_quantity > Decimal::ZERO {
+                    let orderquantity = remaining_quantity;
+                    self.add_new_order(
+                        price,
+                        orderquantity,
+                        order.ordertype,
+                        order.leverage,
+                        order.symbol,
+                        order.userid,
+                    );
+                }
+            }
+            Ordertype::Sell => {
+                for (&buyprice, buyorders) in &mut self.bid.iter_mut().rev() {
+                    if order.price > buyprice {
+                        break;
+                    }
+                    if remaining_quantity <= Decimal::ZERO {
+                        break;
+                    }
+                    for buyorder in buyorders.iter_mut() {
+                        if remaining_quantity <= Decimal::ZERO {
+                            break;
+                        }
+                        let tradequan = remaining_quantity.min(buyorder.quantity);
+                        remaining_quantity -= tradequan;
+                        buyorder.quantity -= tradequan;
+                        let tradeprice = buyprice;
+                        let trade = Trade::new(
+                            tradeprice,
+                            tradequan,
+                            buyorder.userid.clone(),
+                            order.userid.clone(),
+                        );
+                        trades.add_new_trades(trade);
+                        //pushes to trade
+                    }
+                    buyorders.retain(|o| o.quantity > Decimal::ZERO);
+                    if buyorders.is_empty() {
+                        to_remove.push(buyprice);
+                    }
+                }
+                for p in to_remove {
+                    self.bid.remove(&p);
+                }
+                if remaining_quantity > Decimal::ZERO {
+                    let orderquantity = remaining_quantity;
+                    self.add_new_order(
+                        price,
+                        orderquantity,
+                        order.ordertype,
+                        order.leverage,
+                        order.symbol,
+                        order.userid,
+                    );
+                }
+            }
         }
     }
 }

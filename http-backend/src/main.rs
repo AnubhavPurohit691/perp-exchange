@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::{str::FromStr, sync::mpsc, thread};
 use tokio::sync::oneshot;
 
-use crate::model::{OrderBook, Ordertype, User, Users};
+use crate::model::{Order, OrderBook, Ordertype, Trades, User, Users, trades};
 
 #[derive(Debug)]
 pub enum Command {
@@ -129,6 +129,7 @@ async fn create_user_handler(
 fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
     let mut users = Users::new();
     let mut orderbook = OrderBook::new();
+    let mut trades = Trades::new();
     while let Ok(cmd) = rx.recv() {
         match cmd {
             Command::CreateUser { name, responder } => {
@@ -144,8 +145,9 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                 leverage,
                 responder,
             } => {
-                let user = if let Some(user) = users.getuser(&userid) {
-                    user
+                let user = if let Some(user_ref) = users.users.get_mut(&userid) {
+                    // 2. We clone the reference to get an owned User
+                    user_ref
                 } else {
                     let _ = responder.send(Err(String::from("user not found ")));
                     continue;
@@ -155,10 +157,11 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                     Ok(Ordertype) => {
                         let ordervalue = quantity * price;
                         let marginprice = ordervalue / leverage;
+                        let order =
+                            Order::new(price, quantity, Ordertype, leverage, userid, symbol);
                         if user.balance >= marginprice {
-                            orderbook.add_new_order(
-                                price, quantity, Ordertype, leverage, symbol, userid,
-                            );
+                            user.balance -= marginprice;
+                            orderbook.matching_engine(price, order, &mut trades);
                             let _ = responder.send(Ok(String::from("order created succesfully")));
                         } else {
                             let _ =
