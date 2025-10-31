@@ -1,12 +1,22 @@
-use axum::{Json, Router, extract::Extension, response::IntoResponse, routing::post};
+use axum::{
+    Json, Router,
+    extract::{Extension, WebSocketUpgrade},
+    response::IntoResponse,
+    routing::{any, post},
+};
+use futures_util::{SinkExt, StreamExt};
+mod handlers;
 mod model;
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::{str::FromStr, sync::mpsc, thread};
 use tokio::sync::oneshot;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::model::{Order, OrderBook, Ordertype, Trades, User, Users, trades};
+use crate::{
+    handlers::start_binance,
+    model::{Order, OrderBook, Ordertype, Positions, Trades, User, Users, binancemsg},
+};
 
 #[derive(Debug)]
 pub enum Command {
@@ -23,16 +33,27 @@ pub enum Command {
         leverage: Decimal,
         responder: oneshot::Sender<Result<String, String>>,
     },
+    CreateLiquidation {
+        price: Decimal,
+        quantity: Decimal,
+        // responder: oneshot::Sender<Result<String, String>>,
+    },
 }
 
 #[tokio::main]
 async fn main() {
     let (tx, rx) = mpsc::channel::<Command>();
+    let tx_clone = tx.clone();
+    tokio::spawn(async move {
+        start_binance(tx_clone).await;
+    });
+
     thread::spawn(move || orderbook_thread(rx));
 
     let app = Router::new()
         .route("/user", post(create_user_handler))
         .route("/orderbook", post(orderbook_handler))
+        .route("/ws", any(handleliquidation))
         .layer(Extension(tx));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -52,6 +73,8 @@ struct Orderreq {
     userid: String,
     leverage: Decimal,
 }
+
+async fn handleliquidation(ws: WebSocketUpgrade, Extension(tx): Extension<mpsc::Sender<Command>>) {}
 
 async fn orderbook_handler(
     Extension(tx): Extension<mpsc::Sender<Command>>,
@@ -130,11 +153,16 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
     let mut users = Users::new();
     let mut orderbook = OrderBook::new();
     let mut trades = Trades::new();
+    let mut positions = Positions::new();
     while let Ok(cmd) = rx.recv() {
         match cmd {
             Command::CreateUser { name, responder } => {
                 let user = users.add_new_user(name);
                 let _ = responder.send(Ok(user));
+            }
+            Command::CreateLiquidation { price, quantity } => {
+                println!("{:?}", orderbook);
+                
             }
             Command::CreateOrderbook {
                 price,
@@ -161,7 +189,7 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                             Order::new(price, quantity, Ordertype, leverage, userid, symbol);
                         if user.balance >= marginprice {
                             user.balance -= marginprice;
-                            orderbook.matching_engine(price, order, &mut trades);
+                            orderbook.matching_engine(price, order, &mut trades, &mut positions);
                             let _ = responder.send(Ok(String::from("order created succesfully")));
                         } else {
                             let _ =
@@ -172,7 +200,7 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                         let _ = responder.send(Err(err));
                     }
                 }
-            }
+            } // Command::CreateLiquidation {  }
         }
     }
 }

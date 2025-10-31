@@ -6,8 +6,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
-use crate::model::{Trade, Trades, trades};
-#[derive(Clone, Copy)]
+use crate::model::{Positions, Trade, Trades, trades};
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ordertype {
     Buy,
     Sell,
@@ -23,6 +23,7 @@ impl FromStr for Ordertype {
     }
 }
 
+#[derive(Debug)]
 pub struct Order {
     price: Decimal,
     symbol: String,
@@ -53,6 +54,7 @@ impl Order {
         }
     }
 }
+#[derive(Debug)]
 pub struct OrderBook {
     bid: BTreeMap<Decimal, VecDeque<Order>>,
     ask: BTreeMap<Decimal, VecDeque<Order>>,
@@ -89,7 +91,13 @@ impl OrderBook {
                 .push_back(order),
         }
     }
-    pub fn matching_engine(&mut self, price: Decimal, order: Order, trades: &mut Trades) {
+    pub fn matching_engine(
+        &mut self,
+        price: Decimal,
+        order: Order,
+        trades: &mut Trades,
+        positions: &mut Positions,
+    ) {
         let mut remaining_quantity = order.quantity;
         let mut to_remove = vec![];
         match order.ordertype {
@@ -116,6 +124,14 @@ impl OrderBook {
                             sellorder.userid.clone(),
                         );
                         trades.add_new_trades(trade);
+                        positions.update_position(
+                            order.userid.clone(),
+                            order.symbol.clone(),
+                            Ordertype::Buy,
+                            trade_quantity,
+                            order.price,
+                            order.leverage,
+                        );
                     }
                     sellorders.retain(|o| o.quantity > Decimal::ZERO);
                     if sellorders.is_empty() {
@@ -160,6 +176,7 @@ impl OrderBook {
                             order.userid.clone(),
                         );
                         trades.add_new_trades(trade);
+
                         //pushes to trade
                     }
                     buyorders.retain(|o| o.quantity > Decimal::ZERO);

@@ -4,3 +4,7 @@ pub mod order;
 pub use order::*;
 pub mod trades;
 pub use trades::*;
+pub mod position;
+pub use position::*;
+pub mod binancetype;
+pub use binancetype::*;

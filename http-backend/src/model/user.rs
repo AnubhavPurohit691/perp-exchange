@@ -10,6 +10,7 @@ pub struct User {
     pub balance: Decimal,
     pub quantity: Decimal,
 }
+
 impl User {
     pub fn new(name: String) -> User {
         User {
