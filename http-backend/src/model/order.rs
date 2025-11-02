@@ -5,9 +5,10 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use serde::Serialize;
 
 use crate::model::{Positions, Trade, Trades, trades};
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Ordertype {
     Buy,
     Sell,
@@ -54,6 +55,7 @@ impl Order {
         }
     }
 }
+
 #[derive(Debug)]
 pub struct OrderBook {
     bid: BTreeMap<Decimal, VecDeque<Order>>,
@@ -124,14 +126,7 @@ impl OrderBook {
                             sellorder.userid.clone(),
                         );
                         trades.add_new_trades(trade);
-                        positions.update_position(
-                            order.userid.clone(),
-                            order.symbol.clone(),
-                            Ordertype::Buy,
-                            trade_quantity,
-                            order.price,
-                            order.leverage,
-                        );
+                        // positions.add_position();
                     }
                     sellorders.retain(|o| o.quantity > Decimal::ZERO);
                     if sellorders.is_empty() {

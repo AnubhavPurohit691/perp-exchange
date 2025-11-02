@@ -19,11 +19,11 @@ pub async fn start_binance(tx: mpsc::Sender<Command>) {
                 Ok(trade) => {
                     // println!("{:?}", trade);
                     let price = Decimal::from_str(&trade.p).unwrap();
-                    let quantity = Decimal::from_str(&trade.q).unwrap();
+                    // let quantity = Decimal::from_str(&trade.q).unwrap();
                     println!("{}", price);
-                    tx.send(Command::CreateLiquidation {
+                    tx.send(Command::UpdateMarkPrice {
+                        symbol: String::from("btc"),
                         price: price,
-                        quantity: quantity,
                     })
                     .unwrap();
                 }
