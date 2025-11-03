@@ -58,24 +58,23 @@ impl Position {
     }
     fn margin_ratio(&self) -> Decimal {
         if self.equity.is_zero() || self.equity < Decimal::ZERO {
-            return Decimal::MAX;
+            return Decimal::ZERO;
         }
-        self.equity / self.margin
+        self.equity / (self.quantity * self.entry_price)
         //basically if margin rotion is equal maintenance ration then it should liquidate if it is below 1 then it is taking loss or if 1 se uper hai toh profit hai baale baale
     }
     fn isliquidatable(&self, maintenance_margin_ratio: Decimal) -> bool {
         !self.liquidated && self.margin_ratio() <= maintenance_margin_ratio
     }
     fn liquidation_price(&self) -> Decimal {
-        let maintainence_rate = Decimal::from_str_exact("0.005").unwrap();
+        let maintainance_rate = Decimal::from_str_exact("0.005").unwrap();
+        let actualprice = self.entry_price * self.quantity;
         match self.side {
             Ordertype::Buy => {
-                let price_where_exit = self.margin * (Decimal::ONE - maintainence_rate);
-                self.entry_price - (price_where_exit / self.quantity)
+                self.entry_price - ((self.margin - actualprice * maintainance_rate) / self.quantity)
             }
             Ordertype::Sell => {
-                let price_where_exit = self.margin * (Decimal::ONE - maintainence_rate);
-                self.entry_price + (price_where_exit / self.quantity)
+                self.entry_price + ((self.margin - actualprice * maintainance_rate) / self.quantity)
             }
         }
     }
@@ -131,7 +130,7 @@ pub struct LiquidatedPosition {
 }
 pub struct Positions {
     pub positions: HashMap<String, Position>,
-    pub liquidation_queue: BinaryHeap<LiquidationCandidate>,
+    liquidation_queue: BinaryHeap<LiquidationCandidate>,
     pub user_position: HashMap<String, Vec<String>>,
     pub maintenance_margin_ratio: Decimal,
 }
@@ -207,68 +206,6 @@ impl Positions {
             }
         }
         liquidated_position
-    }
-    pub fn get_position(&self, position_id: &str) -> Option<&Position> {
-        self.positions.get(position_id)
-    }
-
-    /// Get all positions for a user
-    pub fn get_user_positions(&self, userid: &str) -> Vec<&Position> {
-        if let Some(position_ids) = self.user_position.get(userid) {
-            position_ids
-                .iter()
-                .filter_map(|id| self.positions.get(id))
-                .collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Get all active (non-liquidated) positions for a user
-    pub fn get_active_positions(&self, userid: &str) -> Vec<&Position> {
-        self.get_user_positions(userid)
-            .into_iter()
-            .filter(|p| !p.liquidated && p.quantity > Decimal::ZERO)
-            .collect()
-    }
-
-    /// Close a specific position manually
-    pub fn close_position(&mut self, position_id: &str, close_price: Decimal) -> Option<Decimal> {
-        if let Some(position) = self.positions.get_mut(position_id) {
-            if position.liquidated || position.quantity <= Decimal::ZERO {
-                return None;
-            }
-
-            let pnl = match position.side {
-                Ordertype::Buy => (close_price - position.entry_price) * position.quantity,
-                Ordertype::Sell => (position.entry_price - close_price) * position.quantity,
-            };
-
-            // Close the position
-            position.quantity = Decimal::ZERO;
-            position.liquidated = true;
-            position.equity = position.margin + pnl;
-
-            Some(pnl)
-        } else {
-            None
-        }
-    }
-
-    /// Get total margin used by a user across all positions
-    pub fn get_user_total_margin(&self, userid: &str) -> Decimal {
-        self.get_active_positions(userid)
-            .iter()
-            .map(|p| p.margin)
-            .sum()
-    }
-
-    /// Get total unrealized PnL for a user
-    pub fn get_user_total_pnl(&self, userid: &str) -> Decimal {
-        self.get_active_positions(userid)
-            .iter()
-            .map(|p| p.un_pnl)
-            .sum()
     }
 }
 

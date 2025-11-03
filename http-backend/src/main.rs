@@ -37,15 +37,15 @@ pub enum Command {
         symbol: String,
         price: Decimal,
     },
-    GetUserPositions {
-        userid: String,
-        responder: oneshot::Sender<Result<Vec<Position>, String>>,
-    },
-    ClosePosition {
-        position_id: String,
-        close_price: Decimal,
-        responder: oneshot::Sender<Result<String, String>>,
-    },
+    // GetUserPositions {
+    //     userid: String,
+    //     responder: oneshot::Sender<Result<Vec<Position>, String>>,
+    // },
+    // ClosePosition {
+    //     position_id: String,
+    //     close_price: Decimal,
+    //     responder: oneshot::Sender<Result<String, String>>,
+    // },
 }
 
 #[tokio::main]
@@ -81,8 +81,6 @@ struct Orderreq {
     userid: String,
     leverage: Decimal,
 }
-
-async fn handleliquidation(ws: WebSocketUpgrade, Extension(tx): Extension<mpsc::Sender<Command>>) {}
 
 async fn orderbook_handler(
     Extension(tx): Extension<mpsc::Sender<Command>>,
@@ -176,76 +174,65 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                 let liquidations = positions.process_liquidation();
 
                 if !liquidations.is_empty() {
-                    println!(
-                        "\n🚨 LIQUIDATIONS PROCESSED: {} positions",
-                        liquidations.len()
-                    );
+                    println!(" LIQUIDATIONS PROCESSED: {} positions", liquidations.len());
                     for liq in &liquidations {
-                        println!("  ├─ Position ID: {}", liq.positionid);
+                        println!("  Position ID: {}", liq.positionid);
                         println!(
-                            "  ├─ User: {}, Symbol: {}, Side: {:?}",
+                            "  User: {}, Symbol: {}, Side: {:?}",
                             liq.userid, liq.symbol, liq.side
                         );
-                        println!(
-                            "  ├─ Quantity: {}, Entry: {}, Leverage: {}x",
-                            liq.quantity, liq.entry_price, liq.leverage
-                        );
-                        println!(
-                            "  ├─ Liquidation Price: {}, Loss: {}",
-                            liq.liquidation_price, liq.loss
-                        );
-                        println!("  └─ Margin Lost: {}\n", liq.margin_lost);
+                        println!(" Margin Lost: {}\n", liq.margin_lost);
 
                         // Return remaining equity to user (if any)
                         if let Some(user) = users.users.get_mut(&liq.userid) {
                             if liq.loss > Decimal::ZERO {
                                 user.balance += liq.loss;
-                                println!("  💰 Returned {} to user balance", liq.loss);
+                                println!("  Returned {} to user balance", liq.loss);
                             }
                         }
                     }
                 }
             }
 
-            Command::GetUserPositions { userid, responder } => {
-                let user_positions = positions.get_user_positions(&userid);
+            // Command::GetUserPositions { userid, responder } => {
+            //     let user_positions = positions.get_user_positions(&userid);
 
-                if user_positions.is_empty() {
-                    let _ = responder.send(Err(String::from("No positions found")));
-                } else {
-                    let cloned: Vec<Position> = user_positions.into_iter().cloned().collect();
-                    let _ = responder.send(Ok(cloned));
-                }
-            }
+            //     if user_positions.is_empty() {
+            //         let _ = responder.send(Err(String::from("No positions found")));
+            //     } else {
+            //         let cloned: Vec<Position> = user_positions.into_iter().cloned().collect();
+            //         let _ = responder.send(Ok(cloned));
+            //     }
+            // }
 
-            Command::ClosePosition {
-                position_id,
-                close_price,
-                responder,
-            } => {
-                if let Some(pnl) = positions.close_position(&position_id, close_price) {
-                    if let Some(position) = positions.get_position(&position_id) {
-                        // Return margin + PnL to user
-                        if let Some(user) = users.users.get_mut(&position.userid) {
-                            let return_amount = position.margin + pnl;
-                            user.balance += return_amount;
+            // Command::ClosePosition {
+            //     position_id,
+            //     close_price,
+            //     responder,
+            // } => {
+            //     if let Some(pnl) = positions.close_position(&position_id, close_price) {
+            //         if let Some(position) = positions.get_position(&position_id) {
+            //             // Return margin + PnL to user
+            //             if let Some(user) = users.users.get_mut(&position.userid) {
+            //                 let return_amount = position.margin + pnl;
+            //                 user.balance += return_amount;
 
-                            println!(
-                                "📤 Position {} closed. PnL: {}, Returned: {}",
-                                position_id, pnl, return_amount
-                            );
+            //                 println!(
+            //                     "Position {} closed. PnL: {}, Returned: {}",
+            //                     position_id, pnl, return_amount
+            //                 );
 
-                            let _ = responder.send(Ok(format!(
-                                "Position closed. PnL: {}, Total returned: {}",
-                                pnl, return_amount
-                            )));
-                        }
-                    }
-                } else {
-                    let _ =
-                        responder.send(Err(String::from("Position not found or already closed")));
-                }
-            }
+            //                 let _ = responder.send(Ok(format!(
+            //                     "Position closed. PnL: {}, Total returned: {}",
+            //                     pnl, return_amount
+            //                 )));
+            //             }
+            //         }
+            //     } else {
+            //         let _ =
+            //             responder.send(Err(String::from("Position not found or already closed")));
+            //     }
+            // }
             Command::CreateOrderbook {
                 price,
                 symbol,

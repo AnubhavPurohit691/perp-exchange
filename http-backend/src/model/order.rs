@@ -126,7 +126,22 @@ impl OrderBook {
                             sellorder.userid.clone(),
                         );
                         trades.add_new_trades(trade);
-                        // positions.add_position();
+                        positions.add_position(
+                            order.userid.clone(),
+                            order.symbol.clone(),
+                            Ordertype::Buy,
+                            trade_quantity,
+                            tradeprice,
+                            order.leverage,
+                        );
+                        positions.add_position(
+                            sellorder.userid.clone(),
+                            sellorder.symbol.clone(),
+                            sellorder.ordertype,
+                            sellorder.quantity,
+                            sellorder.price,
+                            sellorder.leverage,
+                        );
                     }
                     sellorders.retain(|o| o.quantity > Decimal::ZERO);
                     if sellorders.is_empty() {
@@ -171,7 +186,22 @@ impl OrderBook {
                             order.userid.clone(),
                         );
                         trades.add_new_trades(trade);
-
+                        positions.add_position(
+                            order.userid.clone(),
+                            order.symbol.clone(),
+                            Ordertype::Sell,
+                            tradequan,
+                            tradeprice,
+                            order.leverage,
+                        );
+                        positions.add_position(
+                            buyorder.userid.clone(),
+                            buyorder.symbol.clone(),
+                            buyorder.ordertype,
+                            buyorder.quantity,
+                            buyorder.price,
+                            buyorder.leverage,
+                        );
                         //pushes to trade
                     }
                     buyorders.retain(|o| o.quantity > Decimal::ZERO);
