@@ -269,7 +269,7 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                         let _ = responder.send(Err(err));
                     }
                 }
-            } // Command::CreateLiquidation {  }
+            }
         }
     }
 }
