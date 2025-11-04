@@ -114,13 +114,13 @@ Rust (latest stable)
 Cargo build tool
 
 Installation
-git clone https://github.com/anubhavpurohit/perp-exchange
+git clone https://github.com/AnubhavPurohit691/perp-exchange
 cd perpx-backend
 
 Running the Server
 cargo run --release
 
-The server will start listening on localhost:8080 and begin accepting HTTP + WebSocket connections.
+The server will start listening on localhost:3000 and begin accepting HTTP + WebSocket connections.
 
 ⚔️ Benchmarking
 
