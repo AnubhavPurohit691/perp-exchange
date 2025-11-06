@@ -81,7 +81,7 @@ impl Position {
 }
 #[derive(Debug, Clone)]
 struct LiquidationCandidate {
-    positionid: String,
+    pub positionid: String,
     pub userid: String,
     pub symbol: String,
     pub margin_ratio: Decimal,
@@ -208,19 +208,3 @@ impl Positions {
         liquidated_position
     }
 }
-
-// fn update_position(
-//     &self,
-//     position: &mut Position,
-//     new_quantity: Decimal,
-//     new_price: Decimal,
-//     side: Ordertype,
-// ) {
-//     if position.side == side {
-//         let total_cost =
-//             (position.entry_price * position.quantity) + (new_quantity * new_price);
-//         position.quantity += new_quantity;
-//         position.entry_price = total_cost / position.quantity;
-//         position.margin += (new_quantity * new_price) / position.leverage
-//     } else {
-//     }

@@ -1,21 +1,14 @@
-use axum::{
-    Json, Router,
-    extract::{Extension, WebSocketUpgrade},
-    response::IntoResponse,
-    routing::{any, post},
-};
-use futures_util::{SinkExt, StreamExt};
+use axum::{Json, Router, extract::Extension, response::IntoResponse, routing::post};
 mod handlers;
 mod model;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::{str::FromStr, sync::mpsc, thread};
 use tokio::sync::oneshot;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::{
     handlers::start_binance,
-    model::{Order, OrderBook, Ordertype, Position, Positions, Trades, User, Users, binancemsg},
+    model::{Order, OrderBook, Ordertype, Positions, Trades, User, Users},
 };
 
 #[derive(Debug)]
@@ -37,15 +30,6 @@ pub enum Command {
         symbol: String,
         price: Decimal,
     },
-    // GetUserPositions {
-    //     userid: String,
-    //     responder: oneshot::Sender<Result<Vec<Position>, String>>,
-    // },
-    // ClosePosition {
-    //     position_id: String,
-    //     close_price: Decimal,
-    //     responder: oneshot::Sender<Result<String, String>>,
-    // },
 }
 
 #[tokio::main]
@@ -167,22 +151,13 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                 let _ = responder.send(Ok(user));
             }
             Command::UpdateMarkPrice { symbol, price } => {
-                // Update all positions with new mark price
                 positions.update_all_position(&symbol, price);
-
-                // Process liquidations
                 let liquidations = positions.process_liquidation();
-
                 if !liquidations.is_empty() {
                     println!(" LIQUIDATIONS PROCESSED: {} positions", liquidations.len());
                     for liq in &liquidations {
                         println!("  Position ID: {}", liq.positionid);
-                        println!(
-                            "  User: {}, Symbol: {}, Side: {:?}",
-                            liq.userid, liq.symbol, liq.side
-                        );
                         println!(" Margin Lost: {}\n", liq.margin_lost);
-
                         // Return remaining equity to user (if any)
                         if let Some(user) = users.users.get_mut(&liq.userid) {
                             if liq.loss > Decimal::ZERO {
@@ -193,46 +168,6 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                     }
                 }
             }
-
-            // Command::GetUserPositions { userid, responder } => {
-            //     let user_positions = positions.get_user_positions(&userid);
-
-            //     if user_positions.is_empty() {
-            //         let _ = responder.send(Err(String::from("No positions found")));
-            //     } else {
-            //         let cloned: Vec<Position> = user_positions.into_iter().cloned().collect();
-            //         let _ = responder.send(Ok(cloned));
-            //     }
-            // }
-
-            // Command::ClosePosition {
-            //     position_id,
-            //     close_price,
-            //     responder,
-            // } => {
-            //     if let Some(pnl) = positions.close_position(&position_id, close_price) {
-            //         if let Some(position) = positions.get_position(&position_id) {
-            //             // Return margin + PnL to user
-            //             if let Some(user) = users.users.get_mut(&position.userid) {
-            //                 let return_amount = position.margin + pnl;
-            //                 user.balance += return_amount;
-
-            //                 println!(
-            //                     "Position {} closed. PnL: {}, Returned: {}",
-            //                     position_id, pnl, return_amount
-            //                 );
-
-            //                 let _ = responder.send(Ok(format!(
-            //                     "Position closed. PnL: {}, Total returned: {}",
-            //                     pnl, return_amount
-            //                 )));
-            //             }
-            //         }
-            //     } else {
-            //         let _ =
-            //             responder.send(Err(String::from("Position not found or already closed")));
-            //     }
-            // }
             Command::CreateOrderbook {
                 price,
                 symbol,
@@ -243,7 +178,6 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                 responder,
             } => {
                 let user = if let Some(user_ref) = users.users.get_mut(&userid) {
-                    // 2. We clone the reference to get an owned User
                     user_ref
                 } else {
                     let _ = responder.send(Err(String::from("user not found ")));
