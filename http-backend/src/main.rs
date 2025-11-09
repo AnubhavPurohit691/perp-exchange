@@ -3,7 +3,12 @@ mod handlers;
 mod model;
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use std::{str::FromStr, sync::mpsc, thread};
+use std::{
+    str::FromStr,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -139,11 +144,12 @@ async fn create_user_handler(
     }
 }
 
-fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
+fn orderbook_thread(rx: mpsc::Receiver<Command>) {
     let mut users = Users::new();
     let mut orderbook = OrderBook::new();
     let mut trades = Trades::new();
     let mut positions = Positions::new();
+    let mut funding_time_rate = Instant::now();
     while let Ok(cmd) = rx.recv() {
         match cmd {
             Command::CreateUser { name, responder } => {
@@ -154,20 +160,36 @@ fn orderbook_thread(mut rx: mpsc::Receiver<Command>) {
                 positions.update_all_position(&symbol, price);
                 let liquidations = positions.process_liquidation();
                 if !liquidations.is_empty() {
-                    println!(" LIQUIDATIONS PROCESSED: {} positions", liquidations.len());
+                    println!(" liquidation: {} positions", liquidations.len());
                     for liq in &liquidations {
-                        println!("  Position ID: {}", liq.positionid);
-                        println!(" Margin Lost: {}\n", liq.margin_lost);
-                        // Return remaining equity to user (if any)
+                        println!("  positionid: {}", liq.positionid);
+                        println!(" marginloss: {}\n", liq.margin_lost);
                         if let Some(user) = users.users.get_mut(&liq.userid) {
                             if liq.loss > Decimal::ZERO {
                                 user.balance += liq.loss;
-                                println!("  Returned {} to user balance", liq.loss);
+                                println!("  returned {} to user balance", liq.loss);
                             }
                         }
                     }
                 }
+
+                if funding_time_rate.elapsed() >= Duration::from_secs(5) {
+                    funding_time_rate = Instant::now();
+
+                    let midprice = orderbook.midprice();
+                    let p_index = midprice - price / price;
+                    let mut funding_rate = p_index;
+                    let max_rate = Decimal::from_str("0.0075").unwrap();
+                    if funding_rate >= max_rate {
+                        funding_rate = max_rate
+                    } else if funding_rate <= -max_rate {
+                        funding_rate = -max_rate;
+                    }
+                    Positions::manipulate_market_under_fundingrate(&mut positions, funding_rate);
+                    
+                }
             }
+
             Command::CreateOrderbook {
                 price,
                 symbol,

@@ -8,7 +8,7 @@ use nanoid::nanoid;
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::model::{Ordertype, order, user};
+use crate::model::{Ordertype, order, position, user};
 #[derive(Debug, Clone)]
 pub struct Position {
     pub positionid: String,
@@ -20,7 +20,7 @@ pub struct Position {
     pub leverage: Decimal,
     pub margin: Decimal,
     pub un_pnl: Decimal,
-    pub real_pnl: Decimal,
+    pub funding_pnl: Decimal,
     pub liquidated: bool,
     pub equity: Decimal,
 }
@@ -42,7 +42,7 @@ impl Position {
             entry_price: entry_price,
             leverage: leverage,
             un_pnl: Decimal::ZERO,
-            real_pnl: Decimal::ZERO,
+            funding_pnl: Decimal::ZERO,
             margin: margin,
             liquidated: false,
             side: side,
@@ -54,7 +54,7 @@ impl Position {
             Ordertype::Buy => self.un_pnl = (markprice - self.entry_price) * self.quantity,
             Ordertype::Sell => self.un_pnl = (self.entry_price - markprice) * self.quantity,
         }
-        self.equity = self.margin + self.un_pnl;
+        self.equity = self.margin + self.un_pnl + self.funding_pnl;
     }
     fn margin_ratio(&self) -> Decimal {
         if self.equity.is_zero() || self.equity < Decimal::ZERO {
@@ -82,8 +82,8 @@ impl Position {
 #[derive(Debug, Clone)]
 struct LiquidationCandidate {
     pub positionid: String,
-    pub userid: String,
-    pub symbol: String,
+    userid: String,
+    symbol: String,
     pub margin_ratio: Decimal,
 }
 impl LiquidationCandidate {
@@ -142,6 +142,33 @@ impl Positions {
             liquidation_queue: BinaryHeap::new(),
             maintenance_margin_ratio: Decimal::from_str_exact("0.01").unwrap(),
             user_position: HashMap::new(),
+        }
+    }
+    pub fn manipulate_market_under_fundingrate(positions: &mut Positions, fundingrate: Decimal) {
+        for pos in positions.positions.values_mut() {
+            let totalvalue = pos.entry_price * pos.quantity;
+            let fundingpayment = totalvalue * fundingrate.abs();
+
+            if fundingrate > Decimal::ZERO {
+                match pos.side {
+                    Ordertype::Buy => {
+                        pos.funding_pnl -= fundingpayment;
+                    }
+                    Ordertype::Sell => {
+                        pos.funding_pnl += fundingpayment;
+                    }
+                }
+            } else {
+                match pos.side {
+                    Ordertype::Buy => {
+                        pos.equity += fundingpayment;
+                    }
+                    Ordertype::Sell => {
+                        pos.equity -= fundingpayment;
+                    }
+                }
+            }
+            pos.equity = pos.margin + pos.un_pnl + pos.funding_pnl;
         }
     }
     pub fn add_position(
