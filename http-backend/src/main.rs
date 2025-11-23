@@ -35,6 +35,10 @@ pub enum Command {
         symbol: String,
         price: Decimal,
     },
+    // close_orderbook {
+    //     orderid: String,
+    //     responder: oneshot::Sender<Result<String, String>>,
+    // },
 }
 
 #[tokio::main]

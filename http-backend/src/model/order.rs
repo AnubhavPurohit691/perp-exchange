@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::model::{Positions, Trade, Trades, trades};
+use crate::model::{Positions, Trade, Trades};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Ordertype {
     Buy,
@@ -144,8 +144,8 @@ impl OrderBook {
                             sellorder.userid.clone(),
                             sellorder.symbol.clone(),
                             sellorder.ordertype,
-                            sellorder.quantity,
-                            sellorder.price,
+                            trade_quantity,
+                            tradeprice,
                             sellorder.leverage,
                         );
                     }
@@ -204,11 +204,10 @@ impl OrderBook {
                             buyorder.userid.clone(),
                             buyorder.symbol.clone(),
                             buyorder.ordertype,
-                            buyorder.quantity,
-                            buyorder.price,
+                            tradequan,
+                            tradeprice,
                             buyorder.leverage,
                         );
-                        //pushes to trade
                     }
                     buyorders.retain(|o| o.quantity > Decimal::ZERO);
                     if buyorders.is_empty() {

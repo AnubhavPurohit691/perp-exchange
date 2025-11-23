@@ -175,10 +175,10 @@ impl Positions {
             } else {
                 match pos.side {
                     Ordertype::Buy => {
-                        pos.equity += fundingpayment;
+                        pos.funding_pnl += fundingpayment;
                     }
                     Ordertype::Sell => {
-                        pos.equity -= fundingpayment;
+                        pos.funding_pnl -= fundingpayment;
                     }
                 }
             }
