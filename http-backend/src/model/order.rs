@@ -101,7 +101,6 @@ impl OrderBook {
 
     pub fn matching_engine(
         &mut self,
-        price: Decimal,
         order: Order,
         trades: &mut Trades,
         positions: &mut Positions,
@@ -220,7 +219,7 @@ impl OrderBook {
                 if remaining_quantity > Decimal::ZERO {
                     let orderquantity = remaining_quantity;
                     self.add_new_order(
-                        price,
+                        order.price,
                         orderquantity,
                         order.ordertype,
                         order.leverage,

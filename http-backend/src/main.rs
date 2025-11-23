@@ -239,7 +239,7 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                             Order::new(price, quantity, order_type, leverage, userid, symbol);
                         if user.balance >= marginprice {
                             user.balance -= marginprice;
-                            orderbook.matching_engine(price, order, &mut trades, &mut positions);
+                            orderbook.matching_engine(order, &mut trades, &mut positions);
                             let _ = responder.send(Ok(String::from("order created succesfully")));
                         } else {
                             let _ =
