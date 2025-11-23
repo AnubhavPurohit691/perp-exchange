@@ -1,3 +1,3 @@
 [workspace]
 resolver = "3"
-members = [ "benchmark","http-backend"]
+members = [ "benchmark","http-backend","test-engine"]

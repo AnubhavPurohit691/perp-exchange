@@ -33,7 +33,13 @@ impl Position {
         side: Ordertype,
         userid: String,
     ) -> Position {
-        let margin = (quantity * entry_price) / leverage;
+        // Avoid division by zero - if leverage is zero, use 1.0 as default
+        let safe_leverage = if leverage.is_zero() {
+            Decimal::ONE
+        } else {
+            leverage
+        };
+        let margin = (quantity * entry_price) / safe_leverage;
         Position {
             positionid: nanoid!(),
             userid,
@@ -60,13 +66,21 @@ impl Position {
         if self.equity.is_zero() || self.equity < Decimal::ZERO {
             return Decimal::ZERO;
         }
-        self.equity / (self.quantity * self.entry_price)
+        let denominator = self.quantity * self.entry_price;
+        if denominator.is_zero() {
+            return Decimal::ZERO;
+        }
+        self.equity / denominator
         //basically if margin rotion is equal maintenance ration then it should liquidate if it is below 1 then it is taking loss or if 1 se uper hai toh profit hai baale baale
     }
     fn isliquidatable(&self, maintenance_margin_ratio: Decimal) -> bool {
         !self.liquidated && self.margin_ratio() <= maintenance_margin_ratio
     }
     fn liquidation_price(&self) -> Decimal {
+        // Avoid division by zero if quantity is zero
+        if self.quantity.is_zero() {
+            return self.entry_price;
+        }
         let maintainance_rate = Decimal::from_str_exact("0.005").unwrap();
         let actualprice = self.entry_price * self.quantity;
         match self.side {

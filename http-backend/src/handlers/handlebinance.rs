@@ -42,11 +42,13 @@ pub async fn start_binance(tx: mpsc::Sender<Command>) {
                     // let quantity = Decimal::from_str(&trade.q).unwrap();
                     // indexprice = price;
                     // println!("{}", price);
-                    tx.send(Command::UpdateMarkPrice {
+                    if let Err(e) = tx.send(Command::UpdateMarkPrice {
                         symbol: String::from("btc"),
                         price: price,
-                    })
-                    .unwrap();
+                    }) {
+                        eprintln!("failed to send mark price update: {}", e);
+                        break; // Exit if receiver is dropped
+                    }
                 }
                 Err(e) => {
                     println!("error{}", e)

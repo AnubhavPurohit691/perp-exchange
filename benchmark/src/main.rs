@@ -30,7 +30,7 @@ async fn main() {
     let userid = match client.post(&user_url).json(&user_payload).send().await {
         Ok(resp) => match resp.text().await {
             Ok(id) => {
-                println!("✅ User created: {}\n", id);
+                println!(" User created: {}\n", id);
                 id
             }
             Err(_) => panic!("❌ Failed to get user ID from response"),

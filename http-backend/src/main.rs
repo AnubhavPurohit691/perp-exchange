@@ -129,7 +129,7 @@ async fn create_user_handler(
     if send_result.is_err() {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to send command",
+            "failed to send command",
         )
             .into_response();
     }
@@ -160,10 +160,20 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                 positions.update_all_position(&symbol, price);
                 let liquidations = positions.process_liquidation();
                 if !liquidations.is_empty() {
-                    println!(" liquidation: {} positions", liquidations.len());
+                    println!(
+                        "LIQUIDATION EVENT: {} position(s) liquidated",
+                        liquidations.len()
+                    );
                     for liq in &liquidations {
-                        println!("  positionid: {}", liq.positionid);
-                        println!(" marginloss: {}\n", liq.margin_lost);
+                        println!("  position ID: {}", liq.positionid);
+                        println!("  user ID: {}", liq.userid);
+                        println!("  symbol: {}", liq.symbol);
+                        println!("  side: {:?}", liq.side);
+                        println!("  quantity: {}", liq.quantity);
+                        println!("  entry Price: {}", liq.entry_price);
+                        println!("  liquidation Price: {}", liq.liquidation_price);
+                        println!("  margin Lost: {}", liq.margin_lost);
+                        println!("  loss: {}", liq.loss);
                         if let Some(user) = users.users.get_mut(&liq.userid) {
                             if liq.loss > Decimal::ZERO {
                                 user.balance += liq.loss;
@@ -177,18 +187,21 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                     funding_time_rate = Instant::now();
 
                     if let Some(midprice) = orderbook.midprice() {
-                        let p_index = midprice - price / price;
-                        let mut funding_rate = p_index;
-                        let max_rate = Decimal::from_str("0.0075").unwrap();
-                        if funding_rate >= max_rate {
-                            funding_rate = max_rate
-                        } else if funding_rate <= -max_rate {
-                            funding_rate = -max_rate;
+                        // Calculate premium index: (midprice - mark_price) / mark_price
+                        if price > Decimal::ZERO {
+                            let p_index = (midprice - price) / price;
+                            let mut funding_rate = p_index;
+                            let max_rate = Decimal::from_str("0.0075").unwrap();
+                            if funding_rate >= max_rate {
+                                funding_rate = max_rate
+                            } else if funding_rate <= -max_rate {
+                                funding_rate = -max_rate;
+                            }
+                            Positions::manipulate_market_under_fundingrate(
+                                &mut positions,
+                                funding_rate,
+                            );
                         }
-                        Positions::manipulate_market_under_fundingrate(
-                            &mut positions,
-                            funding_rate,
-                        );
                     }
                 }
             }
@@ -210,11 +223,16 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                 };
 
                 match Ordertype::from_str(&ordertype) {
-                    Ok(Ordertype) => {
+                    Ok(order_type) => {
+                        // Avoid division by zero
+                        if leverage.is_zero() {
+                            let _ = responder.send(Err(String::from("leverage cannot be zero")));
+                            continue;
+                        }
                         let ordervalue = quantity * price;
                         let marginprice = ordervalue / leverage;
                         let order =
-                            Order::new(price, quantity, Ordertype, leverage, userid, symbol);
+                            Order::new(price, quantity, order_type, leverage, userid, symbol);
                         if user.balance >= marginprice {
                             user.balance -= marginprice;
                             orderbook.matching_engine(price, order, &mut trades, &mut positions);
