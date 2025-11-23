@@ -159,7 +159,7 @@ impl OrderBook {
                 if remaining_quantity > Decimal::ZERO {
                     let orderquantity = remaining_quantity;
                     self.add_new_order(
-                        price,
+                        order.price,
                         orderquantity,
                         order.ordertype,
                         order.leverage,
