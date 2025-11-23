@@ -176,17 +176,20 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                 if funding_time_rate.elapsed() >= Duration::from_secs(5) {
                     funding_time_rate = Instant::now();
 
-                    let midprice = orderbook.midprice();
-                    let p_index = midprice - price / price;
-                    let mut funding_rate = p_index;
-                    let max_rate = Decimal::from_str("0.0075").unwrap();
-                    if funding_rate >= max_rate {
-                        funding_rate = max_rate
-                    } else if funding_rate <= -max_rate {
-                        funding_rate = -max_rate;
+                    if let Some(midprice) = orderbook.midprice() {
+                        let p_index = midprice - price / price;
+                        let mut funding_rate = p_index;
+                        let max_rate = Decimal::from_str("0.0075").unwrap();
+                        if funding_rate >= max_rate {
+                            funding_rate = max_rate
+                        } else if funding_rate <= -max_rate {
+                            funding_rate = -max_rate;
+                        }
+                        Positions::manipulate_market_under_fundingrate(
+                            &mut positions,
+                            funding_rate,
+                        );
                     }
-                    Positions::manipulate_market_under_fundingrate(&mut positions, funding_rate);
-                    
                 }
             }
 

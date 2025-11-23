@@ -93,10 +93,10 @@ impl OrderBook {
                 .push_back(order),
         }
     }
-    pub fn midprice(&self) -> Decimal {
-        let bestbid = self.bid.keys().last().unwrap();
-        let bestask = self.ask.keys().next().unwrap();
-        (bestask + bestbid) / Decimal::from(2)
+    pub fn midprice(&self) -> Option<Decimal> {
+        let bestbid = self.bid.keys().last()?;
+        let bestask = self.ask.keys().next()?;
+        Some((bestask + bestbid) / Decimal::from(2))
     }
 
     pub fn matching_engine(
