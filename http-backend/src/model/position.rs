@@ -2,14 +2,15 @@ use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap},
     str::FromStr,
+    string,
 };
 
 use nanoid::nanoid;
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{Ordertype, order, position, user};
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub positionid: String,
     pub userid: String,
@@ -66,11 +67,11 @@ impl Position {
         if self.equity.is_zero() || self.equity < Decimal::ZERO {
             return Decimal::ZERO;
         }
-        let denominator = self.quantity * self.entry_price;
-        if denominator.is_zero() {
+        let price = self.quantity * self.entry_price;
+        if price <= Decimal::ZERO {
             return Decimal::ZERO;
         }
-        self.equity / denominator
+        self.equity / price
         //basically if margin rotion is equal maintenance ration then it should liquidate if it is below 1 then it is taking loss or if 1 se uper hai toh profit hai baale baale
     }
     fn isliquidatable(&self, maintenance_margin_ratio: Decimal) -> bool {
@@ -142,6 +143,8 @@ pub struct LiquidatedPosition {
     pub margin_lost: Decimal,
     pub leverage: Decimal,
 }
+
+#[derive(Debug, Clone)]
 pub struct Positions {
     pub positions: HashMap<String, Position>,
     liquidation_queue: BinaryHeap<LiquidationCandidate>,
@@ -247,5 +250,20 @@ impl Positions {
             }
         }
         liquidated_position
+    }
+    // pub fn close_position(&mut self, positionid: String) {
+    //     if let Some(position) = self.positions.get_mut(&positionid) {
+    //         position.
+    //     }
+    // }
+    pub fn open_position(&mut self, userid: String) -> Option<Vec<Position>> {
+        let posi = self.user_position.get(&userid)?;
+        let posivect = posi
+            .iter()
+            .filter_map(|p| self.positions.get(p))
+            .filter(|p| !p.liquidated && p.quantity > Decimal::ZERO)
+            .cloned()
+            .collect();
+        Some(posivect)
     }
 }

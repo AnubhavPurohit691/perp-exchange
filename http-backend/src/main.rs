@@ -1,4 +1,9 @@
-use axum::{Json, Router, extract::Extension, response::IntoResponse, routing::post};
+use axum::{
+    Json, Router,
+    extract::Extension,
+    response::IntoResponse,
+    routing::{get, post},
+};
 mod handlers;
 mod model;
 use rust_decimal::Decimal;
@@ -13,7 +18,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     handlers::start_binance,
-    model::{Order, OrderBook, Ordertype, Positions, Trades, User, Users},
+    model::{Order, OrderBook, Ordertype, Position, Positions, Trades, User, Users},
 };
 
 #[derive(Debug)]
@@ -35,10 +40,14 @@ pub enum Command {
         symbol: String,
         price: Decimal,
     },
-    // close_orderbook {
-    //     orderid: String,
-    //     responder: oneshot::Sender<Result<String, String>>,
-    // },
+    close_orderbook {
+        positionid: String,
+        responder: oneshot::Sender<Result<String, String>>,
+    },
+    open_position {
+        userid: String,
+        responder: oneshot::Sender<Result<Vec<Position>, String>>,
+    },
 }
 
 #[tokio::main]
@@ -54,8 +63,9 @@ async fn main() {
     let app = Router::new()
         .route("/user", post(create_user_handler))
         .route("/orderbook", post(orderbook_handler))
-        // .route("/ws", any(handleliquidation))
+        .route("/openpositions", get(get_all_positions))
         .layer(Extension(tx));
+    // .route("/ws", any(handleliquidation))
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -74,7 +84,38 @@ struct Orderreq {
     userid: String,
     leverage: Decimal,
 }
-
+#[derive(Deserialize)]
+struct Positionreq {
+    userid: String,
+}
+async fn get_all_positions(
+    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Json(payload): Json<Positionreq>,
+) -> impl IntoResponse {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let send_result = tokio::task::spawn_blocking({
+        let tx = tx.clone();
+        move || {
+            tx.send(Command::open_position {
+                userid: payload.userid,
+                responder: resp_tx,
+            })
+        }
+    })
+    .await;
+    if send_result.is_err() {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to send message",
+        )
+            .into_response();
+    }
+    match resp_rx.await {
+        Ok(Ok(r)) => Json(r).into_response(),
+        Ok((Err(_))) => String::from("failed").into_response(),
+        Err(_) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "failed").into_response(),
+    }
+}
 async fn orderbook_handler(
     Extension(tx): Extension<mpsc::Sender<Command>>,
     Json(payload): Json<Orderreq>,
@@ -156,6 +197,24 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
     let mut funding_time_rate = Instant::now();
     while let Ok(cmd) = rx.recv() {
         match cmd {
+            Command::close_orderbook {
+                positionid,
+                responder,
+            } => {
+                
+            }
+            Command::open_position { userid, responder } => {
+                let userid = userid;
+                let open_positions = positions.open_position(userid);
+                match open_positions {
+                    Some(open_) => {
+                        let _ = responder.send(Ok(open_));
+                    }
+                    None => {
+                        let _ = responder.send(Err(String::from("position not found")));
+                    }
+                }
+            }
             Command::CreateUser { name, responder } => {
                 let user = users.add_new_user(name);
                 let _ = responder.send(Ok(user));
@@ -187,13 +246,13 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                     }
                 }
 
-                if funding_time_rate.elapsed() >= Duration::from_secs(5) {
+                if funding_time_rate.elapsed() >= Duration::from_secs(8 * 60 * 60) {
                     funding_time_rate = Instant::now();
 
                     if let Some(midprice) = orderbook.midprice() {
                         // Calculate premium index: (midprice - mark_price) / mark_price
                         if price > Decimal::ZERO {
-                            let p_index = (midprice - price) / price;
+                            let p_index = (midprice - price) / price; // should use binance markprice - indexprice where mark is there perp btc price and index is there spot price btc
                             let mut funding_rate = p_index;
                             let max_rate = Decimal::from_str("0.0075").unwrap();
                             if funding_rate >= max_rate {
