@@ -9,7 +9,7 @@ use nanoid::nanoid;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Ordertype, order, position, user};
+use crate::model::{Ordertype, Users, order, position, user};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub positionid: String,
@@ -251,11 +251,34 @@ impl Positions {
         }
         liquidated_position
     }
-    // pub fn close_position(&mut self, positionid: String) {
-    //     if let Some(position) = self.positions.get_mut(&positionid) {
-    //         position.
-    //     }
-    // }
+    pub fn close_position(
+        &mut self,
+        positionid: &str,
+        markprice: &Decimal,
+        users: &mut Users,
+    ) -> Option<String> {
+        let position = self.positions.get_mut(positionid)?;
+
+        if position.liquidated || position.quantity.is_zero() {
+            return None;
+        }
+
+        let realized_pnl = match position.side {
+            Ordertype::Buy => (markprice - position.entry_price) * position.quantity,
+            Ordertype::Sell => (position.entry_price - markprice) * position.quantity,
+        };
+
+        let total_return = position.margin + position.funding_pnl + realized_pnl;
+
+        let user = users.getusermut(&position.userid)?;
+        user.balance += total_return;
+
+        position.liquidated = true;
+        position.quantity = Decimal::ZERO;
+        position.equity = Decimal::ZERO;
+
+        Some(String::from("orderclosed"))
+    }
     pub fn open_position(&mut self, userid: String) -> Option<Vec<Position>> {
         let posi = self.user_position.get(&userid)?;
         let posivect = posi

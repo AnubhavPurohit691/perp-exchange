@@ -31,6 +31,9 @@ impl Users {
             users: HashMap::new(),
         }
     }
+    pub fn getusermut(&mut self, userid: &str) -> Option<&mut User> {
+        self.users.get_mut(userid)
+    }
     pub fn add_new_user(&mut self, name: String) -> User {
         let user = User::new(name);
         self.users.insert(user.userid.clone(), user.clone());

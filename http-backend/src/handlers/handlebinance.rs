@@ -49,6 +49,13 @@ pub async fn start_binance(tx: mpsc::Sender<Command>) {
                         eprintln!("failed to send mark price update: {}", e);
                         break; // Exit if receiver is dropped
                     }
+                    // if let Err(e) = tx.send(Command::close_orderbook { positionid: (), responder: () } {
+                    //     symbol: String::from("btc"),
+                    //     price: price,
+                    // }) {
+                    //     eprintln!("failed to send mark price update: {}", e);
+                    //     break; // Exit if receiver is dropped
+                    // }
                 }
                 Err(e) => {
                     println!("error{}", e)

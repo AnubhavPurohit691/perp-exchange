@@ -9,6 +9,7 @@ mod model;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     str::FromStr,
     sync::mpsc,
     thread,
@@ -40,11 +41,11 @@ pub enum Command {
         symbol: String,
         price: Decimal,
     },
-    close_orderbook {
+    ClosePosition {
         positionid: String,
         responder: oneshot::Sender<Result<String, String>>,
     },
-    open_position {
+    OpenPosition {
         userid: String,
         responder: oneshot::Sender<Result<Vec<Position>, String>>,
     },
@@ -96,7 +97,7 @@ async fn get_all_positions(
     let send_result = tokio::task::spawn_blocking({
         let tx = tx.clone();
         move || {
-            tx.send(Command::open_position {
+            tx.send(Command::OpenPosition {
                 userid: payload.userid,
                 responder: resp_tx,
             })
@@ -195,15 +196,25 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
     let mut trades = Trades::new();
     let mut positions = Positions::new();
     let mut funding_time_rate = Instant::now();
+    let mut latestmarkprice: HashMap<String, Decimal> = HashMap::new();
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            Command::close_orderbook {
+            Command::ClosePosition {
                 positionid,
                 responder,
             } => {
-                
+                if let Some(markprice) = latestmarkprice.get("btc") {
+                    if let Some(closeposi) =
+                        positions.close_position(&positionid, markprice, &mut users)
+                    {
+                        let _ = responder.send(Ok(closeposi));
+                    } else {
+                        let _ = responder
+                            .send(Err(String::from("error in sending it to other thread")));
+                    }
+                }
             }
-            Command::open_position { userid, responder } => {
+            Command::OpenPosition { userid, responder } => {
                 let userid = userid;
                 let open_positions = positions.open_position(userid);
                 match open_positions {
@@ -220,6 +231,7 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                 let _ = responder.send(Ok(user));
             }
             Command::UpdateMarkPrice { symbol, price } => {
+                latestmarkprice.insert(symbol.clone(), price);
                 positions.update_all_position(&symbol, price);
                 let liquidations = positions.process_liquidation();
                 if !liquidations.is_empty() {
