@@ -65,6 +65,7 @@ async fn main() {
         .route("/user", post(create_user_handler))
         .route("/orderbook", post(orderbook_handler))
         .route("/openpositions", get(get_all_positions))
+        .route("/closeposition", post(handlecloseposition))
         .layer(Extension(tx));
     // .route("/ws", any(handleliquidation))
 
@@ -88,6 +89,36 @@ struct Orderreq {
 #[derive(Deserialize)]
 struct Positionreq {
     userid: String,
+}
+#[derive(Deserialize)]
+struct Closereq {
+    positionid: String,
+}
+async fn handlecloseposition(
+    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Json(payload): Json<Closereq>,
+) -> impl IntoResponse {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let send_result = tokio::task::spawn_blocking({
+        move || {
+            tx.send(Command::ClosePosition {
+                positionid: payload.positionid,
+                responder: resp_tx,
+            })
+        }
+    })
+    .await;
+    if send_result.is_err() {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "failed in sending to other thread",
+        )
+            .into_response();
+    }
+    match resp_rx.await {
+        Ok(e) => Json(e).into_response(),
+        Err(_) => String::from("not closing").into_response(),
+    }
 }
 async fn get_all_positions(
     Extension(tx): Extension<mpsc::Sender<Command>>,
@@ -212,6 +243,8 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                         let _ = responder
                             .send(Err(String::from("error in sending it to other thread")));
                     }
+                } else {
+                    let _ = responder.send(Err(String::from("mark price not found")));
                 }
             }
             Command::OpenPosition { userid, responder } => {
