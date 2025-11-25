@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     handlers::start_binance,
@@ -27,6 +28,10 @@ pub enum Command {
     CreateUser {
         name: String,
         responder: oneshot::Sender<Result<User, String>>,
+    },
+    Getbalance {
+        userid: String,
+        responder: oneshot::Sender<Result<Decimal, String>>,
     },
     CreateOrderbook {
         price: Decimal,
@@ -53,6 +58,10 @@ pub enum Command {
 
 #[tokio::main]
 async fn main() {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_headers(Any)
+        .allow_methods(Any);
     let (tx, rx) = mpsc::channel::<Command>();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
@@ -66,7 +75,9 @@ async fn main() {
         .route("/orderbook", post(orderbook_handler))
         .route("/openpositions", get(get_all_positions))
         .route("/closeposition", post(handlecloseposition))
-        .layer(Extension(tx));
+        .route("/getbalance", get(gethandlebalance))
+        .layer(Extension(tx))
+        .layer(cors);
     // .route("/ws", any(handleliquidation))
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -93,6 +104,35 @@ struct Positionreq {
 #[derive(Deserialize)]
 struct Closereq {
     positionid: String,
+}
+
+async fn gethandlebalance(
+    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Json(payload): Json<Positionreq>,
+) -> impl IntoResponse {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let send_result = tokio::task::spawn_blocking({
+        move || {
+            tx.send(Command::Getbalance {
+                userid: payload.userid,
+                responder: resp_tx,
+            })
+        }
+    })
+    .await;
+
+    if send_result.is_err() {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "failed in sending to other thread",
+        )
+            .into_response();
+    }
+    match resp_rx.await {
+        Ok(Ok(k)) => Json(k).into_response(),
+        Ok(Err(e)) => e.into_response(),
+        Err(_) => String::from("failed").into_response(),
+    }
 }
 async fn handlecloseposition(
     Extension(tx): Extension<mpsc::Sender<Command>>,
@@ -230,6 +270,14 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
     let mut latestmarkprice: HashMap<String, Decimal> = HashMap::new();
     while let Ok(cmd) = rx.recv() {
         match cmd {
+            Command::Getbalance { userid, responder } => {
+                if let Some(user) = users.getusermut(&userid) {
+                    let balance = user.balance;
+                    let _ = responder.send(Ok(balance));
+                } else {
+                    let _ = responder.send(Err(String::from("can't found user")));
+                }
+            }
             Command::ClosePosition {
                 positionid,
                 responder,
@@ -291,7 +339,7 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                     }
                 }
 
-                if funding_time_rate.elapsed() >= Duration::from_secs(8 * 60 * 60) {
+                if funding_time_rate.elapsed() >= Duration::from_secs(5) {
                     funding_time_rate = Instant::now();
 
                     if let Some(midprice) = orderbook.midprice() {
