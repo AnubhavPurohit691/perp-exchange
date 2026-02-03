@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::Extension,
+    middleware,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -20,13 +21,25 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     handlers::start_binance,
-    model::{Order, OrderBook, Ordertype, Position, Positions, Trades, User, Users},
+    model::{
+        Order, OrderBook, Ordertype, Position, Positions, Trades, User, Users, create_jwt, verify,
+        verify_password,
+    },
 };
+
+const SYMBOL_BTC: &str = "btc";
 
 #[derive(Debug)]
 pub enum Command {
     CreateUser {
         name: String,
+        email: String,
+        password: String,
+        responder: oneshot::Sender<Result<User, String>>,
+    },
+    LoginUser {
+        email: String,
+        password: String,
         responder: oneshot::Sender<Result<User, String>>,
     },
     Getbalance {
@@ -70,12 +83,16 @@ async fn main() {
 
     thread::spawn(move || orderbook_thread(rx));
 
-    let app = Router::new()
-        .route("/user", post(create_user_handler))
+    let protected_routes = Router::new()
         .route("/orderbook", post(orderbook_handler))
         .route("/openpositions", get(get_all_positions))
         .route("/closeposition", post(handlecloseposition))
         .route("/getbalance", get(gethandlebalance))
+        .layer(middleware::from_fn(auth_middleware));
+    let app = Router::new()
+        .route("/signup", post(signup_handler))
+        .route("/login", post(login_handler))
+        .merge(protected_routes)
         .layer(Extension(tx))
         .layer(cors);
     // .route("/ws", any(handleliquidation))
@@ -87,34 +104,74 @@ async fn main() {
 #[derive(Deserialize)]
 struct UserReq {
     name: String,
+    email: String,
+    password: String,
 }
 #[derive(Deserialize)]
 struct Orderreq {
     price: Decimal,
-    symbol: String,
     quantity: Decimal,
     ordertype: String,
-    userid: String,
     leverage: Decimal,
-}
-#[derive(Deserialize)]
-struct Positionreq {
-    userid: String,
 }
 #[derive(Deserialize)]
 struct Closereq {
     positionid: String,
 }
+#[derive(Deserialize)]
+struct LoginReq {
+    email: String,
+    password: String,
+}
+
+#[derive(serde::Serialize)]
+struct AuthResponse {
+    token: String,
+    user: User,
+}
+
+#[derive(Clone)]
+struct AuthUser {
+    userid: String,
+}
+
+async fn auth_middleware(
+    mut req: axum::http::Request<axum::body::Body>,
+    next: middleware::Next,
+) -> impl IntoResponse {
+    let auth_header = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .map(str::to_string)
+        .unwrap_or_default();
+
+    if token.is_empty() {
+        return (axum::http::StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
+    }
+
+    match verify(&token) {
+        Ok(claims) => {
+            req.extensions_mut().insert(AuthUser { userid: claims.sub });
+            next.run(req).await
+        }
+        Err(_) => (axum::http::StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+    }
+}
 
 async fn gethandlebalance(
     Extension(tx): Extension<mpsc::Sender<Command>>,
-    Json(payload): Json<Positionreq>,
+    Extension(auth): Extension<AuthUser>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
     let send_result = tokio::task::spawn_blocking({
         move || {
             tx.send(Command::Getbalance {
-                userid: payload.userid,
+                userid: auth.userid,
                 responder: resp_tx,
             })
         }
@@ -162,14 +219,14 @@ async fn handlecloseposition(
 }
 async fn get_all_positions(
     Extension(tx): Extension<mpsc::Sender<Command>>,
-    Json(payload): Json<Positionreq>,
+    Extension(auth): Extension<AuthUser>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
     let send_result = tokio::task::spawn_blocking({
         let tx = tx.clone();
         move || {
             tx.send(Command::OpenPosition {
-                userid: payload.userid,
+                userid: auth.userid,
                 responder: resp_tx,
             })
         }
@@ -184,12 +241,13 @@ async fn get_all_positions(
     }
     match resp_rx.await {
         Ok(Ok(r)) => Json(r).into_response(),
-        Ok((Err(_))) => String::from("failed").into_response(),
+        Ok(Err(_)) => String::from("failed").into_response(),
         Err(_) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "failed").into_response(),
     }
 }
 async fn orderbook_handler(
     Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(auth): Extension<AuthUser>,
     Json(payload): Json<Orderreq>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
@@ -198,10 +256,10 @@ async fn orderbook_handler(
         move || {
             tx.send(Command::CreateOrderbook {
                 price: payload.price,
-                symbol: payload.symbol,
+                symbol: SYMBOL_BTC.to_string(),
                 quantity: payload.quantity,
                 ordertype: payload.ordertype,
-                userid: payload.userid,
+                userid: auth.userid,
                 leverage: payload.leverage,
                 responder: resp_tx,
             })
@@ -225,7 +283,7 @@ async fn orderbook_handler(
     }
 }
 
-async fn create_user_handler(
+async fn signup_handler(
     Extension(tx): Extension<mpsc::Sender<Command>>,
     Json(payload): Json<UserReq>,
 ) -> impl IntoResponse {
@@ -234,9 +292,13 @@ async fn create_user_handler(
     let send_result = tokio::task::spawn_blocking({
         let tx = tx.clone();
         let name = payload.name.clone();
+        let email = payload.email.clone();
+        let password = payload.password.clone();
         move || {
             tx.send(Command::CreateUser {
                 name,
+                email,
+                password,
                 responder: resp_tx,
             })
         }
@@ -252,7 +314,53 @@ async fn create_user_handler(
     }
 
     match resp_rx.await {
-        Ok(result) => Json(result).into_response(),
+        Ok(Ok(user)) => {
+            let token = create_jwt(&user.userid);
+            Json(AuthResponse { token, user }).into_response()
+        }
+        Ok(Err(err)) => (axum::http::StatusCode::BAD_REQUEST, err).into_response(),
+        Err(_) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Worker thread failed",
+        )
+            .into_response(),
+    }
+}
+
+async fn login_handler(
+    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Json(payload): Json<LoginReq>,
+) -> impl IntoResponse {
+    let (resp_tx, resp_rx) = oneshot::channel();
+
+    let send_result = tokio::task::spawn_blocking({
+        let tx = tx.clone();
+        let email = payload.email.clone();
+        let password = payload.password.clone();
+        move || {
+            tx.send(Command::LoginUser {
+                email,
+                password,
+                responder: resp_tx,
+            })
+        }
+    })
+    .await;
+
+    if send_result.is_err() {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to send command",
+        )
+            .into_response();
+    }
+
+    match resp_rx.await {
+        Ok(Ok(user)) => {
+            let token = create_jwt(&user.userid);
+            Json(AuthResponse { token, user }).into_response()
+        }
+        Ok(Err(err)) => (axum::http::StatusCode::UNAUTHORIZED, err).into_response(),
         Err(_) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             "Worker thread failed",
@@ -307,17 +415,45 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                     }
                 }
             }
-            Command::CreateUser { name, responder } => {
-                let user = users.add_new_user(name);
-                let _ = responder.send(Ok(user));
+            Command::CreateUser {
+                name,
+                responder,
+                email,
+                password,
+            } => {
+                let user = users.add_new_user(name, email, password);
+                let _ = responder.send(user);
+            }
+            Command::LoginUser {
+                email,
+                password,
+                responder,
+            } => {
+                let user = users
+                    .find_by_email(&email)
+                    .ok_or_else(|| String::from("invalid credentials"));
+
+                let result = match user {
+                    Ok(user) => {
+                        if verify_password(&user.password_hash, &password) {
+                            Ok(user.clone())
+                        } else {
+                            Err(String::from("invalid credentials"))
+                        }
+                    }
+                    Err(err) => Err(err),
+                };
+
+                let _ = responder.send(result);
             }
             Command::UpdateMarkPrice { symbol, price } => {
+                let symbol = SYMBOL_BTC.to_string();
                 latestmarkprice.insert(symbol.clone(), price);
                 positions.update_all_position(&symbol, price);
                 let liquidations = positions.process_liquidation();
                 if !liquidations.is_empty() {
                     println!(
-                        "LIQUIDATION EVENT: {} position(s) liquidated",
+                        "liquidation event: {} position(s) liquidated",
                         liquidations.len()
                     );
                     for liq in &liquidations {
@@ -364,7 +500,7 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
 
             Command::CreateOrderbook {
                 price,
-                symbol,
+                symbol: _,
                 quantity,
                 ordertype,
                 userid,
@@ -387,8 +523,14 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                         }
                         let ordervalue = quantity * price;
                         let marginprice = ordervalue / leverage;
-                        let order =
-                            Order::new(price, quantity, order_type, leverage, userid, symbol);
+                        let order = Order::new(
+                            price,
+                            quantity,
+                            order_type,
+                            leverage,
+                            userid,
+                            SYMBOL_BTC.to_string(),
+                        );
                         if user.balance >= marginprice {
                             user.balance -= marginprice;
                             orderbook.matching_engine(order, &mut trades, &mut positions);
