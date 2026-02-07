@@ -7,23 +7,24 @@ use axum::{
 };
 mod handlers;
 mod model;
+use deadpool_redis::redis::AsyncCommands;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
     str::FromStr,
-    sync::mpsc,
+    sync::mpsc as std_mpsc,
     thread,
     time::{Duration, Instant},
 };
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
-    handlers::start_binance,
+    handlers::{Redis, start_binance},
     model::{
-        Order, OrderBook, Ordertype, Position, Positions, Trades, User, Users, create_jwt, verify,
-        verify_password,
+        Order, OrderBook, Ordertype, Position, Positions, TradeEvent, Trades, User, Users,
+        create_jwt, verify, verify_password,
     },
 };
 
@@ -46,6 +47,7 @@ pub enum Command {
         userid: String,
         responder: oneshot::Sender<Result<Decimal, String>>,
     },
+
     CreateOrderbook {
         price: Decimal,
         symbol: String,
@@ -71,18 +73,22 @@ pub enum Command {
 
 #[tokio::main]
 async fn main() {
+    let redis = Redis::new("redis://127.0.0.1/");
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_headers(Any)
         .allow_methods(Any);
-    let (tx, rx) = mpsc::channel::<Command>();
+    let (tx, rx) = std_mpsc::channel::<Command>();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
         start_binance(tx_clone).await;
     });
 
-    thread::spawn(move || orderbook_thread(rx));
+    let (trade_tx, trade_rx) = tokio_mpsc::channel::<TradeEvent>(10_000);
+    let redis_clone = redis.clone();
+    tokio::spawn(async move { trade_redis_worker(redis_clone, trade_rx).await });
 
+    thread::spawn(move || orderbook_thread(rx, trade_tx));
     let protected_routes = Router::new()
         .route("/orderbook", post(orderbook_handler))
         .route("/openpositions", get(get_all_positions))
@@ -164,7 +170,7 @@ async fn auth_middleware(
 }
 
 async fn gethandlebalance(
-    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
     Extension(auth): Extension<AuthUser>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
@@ -192,7 +198,7 @@ async fn gethandlebalance(
     }
 }
 async fn handlecloseposition(
-    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
     Json(payload): Json<Closereq>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
@@ -218,7 +224,7 @@ async fn handlecloseposition(
     }
 }
 async fn get_all_positions(
-    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
     Extension(auth): Extension<AuthUser>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
@@ -245,8 +251,9 @@ async fn get_all_positions(
         Err(_) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "failed").into_response(),
     }
 }
+
 async fn orderbook_handler(
-    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
     Extension(auth): Extension<AuthUser>,
     Json(payload): Json<Orderreq>,
 ) -> impl IntoResponse {
@@ -284,7 +291,7 @@ async fn orderbook_handler(
 }
 
 async fn signup_handler(
-    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
     Json(payload): Json<UserReq>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
@@ -328,7 +335,7 @@ async fn signup_handler(
 }
 
 async fn login_handler(
-    Extension(tx): Extension<mpsc::Sender<Command>>,
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
     Json(payload): Json<LoginReq>,
 ) -> impl IntoResponse {
     let (resp_tx, resp_rx) = oneshot::channel();
@@ -369,7 +376,25 @@ async fn login_handler(
     }
 }
 
-fn orderbook_thread(rx: mpsc::Receiver<Command>) {
+async fn trade_redis_worker(redis: Redis, mut rx: tokio_mpsc::Receiver<TradeEvent>) {
+    while let Some(event) = rx.recv().await {
+        let payload = match serde_json::to_string(&event) {
+            Ok(json) => json,
+            Err(_) => continue,
+        };
+        let mut conn = match redis.pool.get().await {
+            Ok(conn) => conn,
+            Err(_) => continue,
+        };
+        let queue_key = format!("trades:{}", event.symbol);
+        let _: usize = match conn.rpush(queue_key, payload).await {
+            Ok(len) => len,
+            Err(_) => continue,
+        };
+    }
+}
+
+fn orderbook_thread(rx: std_mpsc::Receiver<Command>, trade_tx: tokio_mpsc::Sender<TradeEvent>) {
     let mut users = Users::new();
     let mut orderbook = OrderBook::new();
     let mut trades = Trades::new();
@@ -533,7 +558,12 @@ fn orderbook_thread(rx: mpsc::Receiver<Command>) {
                         );
                         if user.balance >= marginprice {
                             user.balance -= marginprice;
-                            orderbook.matching_engine(order, &mut trades, &mut positions);
+                            orderbook.matching_engine(
+                                order,
+                                &mut trades,
+                                &mut positions,
+                                &trade_tx,
+                            );
                             let _ = responder.send(Ok(String::from("order created succesfully")));
                         } else {
                             let _ =

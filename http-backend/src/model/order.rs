@@ -6,8 +6,9 @@ use std::{
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::Sender;
 
-use crate::model::{Positions, Trade, Trades};
+use crate::model::{Positions, Trade, TradeEvent, Trades};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ordertype {
     Buy,
@@ -104,6 +105,7 @@ impl OrderBook {
         order: Order,
         trades: &mut Trades,
         positions: &mut Positions,
+        trade_tx: &Sender<TradeEvent>,
     ) {
         let mut remaining_quantity = order.quantity;
         let mut to_remove = vec![];
@@ -129,8 +131,10 @@ impl OrderBook {
                             trade_quantity,
                             order.userid.clone(),
                             sellorder.userid.clone(),
+                            order.symbol.clone(),
                         );
-                        trades.add_new_trades(trade);
+                        let event = trades.add_new_trades(trade);
+                        let _ = trade_tx.blocking_send(event);
                         positions.add_position(
                             order.userid.clone(),
                             order.symbol.clone(),
@@ -189,8 +193,10 @@ impl OrderBook {
                             tradequan,
                             buyorder.userid.clone(),
                             order.userid.clone(),
+                            order.symbol.clone(),
                         );
-                        trades.add_new_trades(trade);
+                        let event = trades.add_new_trades(trade);
+                        let _ = trade_tx.blocking_send(event);
                         positions.add_position(
                             order.userid.clone(),
                             order.symbol.clone(),
