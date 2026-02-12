@@ -21,7 +21,7 @@ use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
-    handlers::{Redis, start_binance},
+    handlers::{get_candles, Redis, start_binance},
     model::{
         Order, OrderBook, Ordertype, Position, Positions, TradeEvent, Trades, User, Users,
         create_jwt, verify, verify_password,
@@ -43,6 +43,10 @@ pub enum Command {
         password: String,
         responder: oneshot::Sender<Result<User, String>>,
     },
+    GetUser {
+        userid: String,
+        responder: oneshot::Sender<Result<User, String>>,
+    },
     Getbalance {
         userid: String,
         responder: oneshot::Sender<Result<Decimal, String>>,
@@ -56,6 +60,9 @@ pub enum Command {
         userid: String,
         leverage: Decimal,
         responder: oneshot::Sender<Result<String, String>>,
+    },
+    GetOrderbookState {
+        responder: oneshot::Sender<OrderbookSnapshot>,
     },
     UpdateMarkPrice {
         symbol: String,
@@ -71,8 +78,42 @@ pub enum Command {
     },
 }
 
+/// A single price level in the orderbook
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct PriceLevel {
+    pub price: Decimal,
+    pub quantity: Decimal,
+}
+
+/// Snapshot of the current orderbook state
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct OrderbookSnapshot {
+    pub bids: Vec<PriceLevel>,
+    pub asks: Vec<PriceLevel>,
+}
+
 #[tokio::main]
 async fn main() {
+    // Load .env from current dir or http-backend/ so TIMESCALE_URL is used
+    dotenvy::dotenv().ok();
+    if std::env::var("TIMESCALE_URL").is_err() && std::env::var("DATABASE_URL").is_err() {
+        if let Ok(dir) = std::env::current_dir() {
+            let env_in_backend = dir.join("http-backend").join(".env");
+            if env_in_backend.exists() {
+                let _ = dotenvy::from_path(env_in_backend);
+            }
+        }
+    }
+
+    let database_url = std::env::var("TIMESCALE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgres://localhost/perp".to_string());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("connect to database");
+
     let redis = Redis::new("redis://127.0.0.1/");
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -90,16 +131,19 @@ async fn main() {
 
     thread::spawn(move || orderbook_thread(rx, trade_tx));
     let protected_routes = Router::new()
-        .route("/orderbook", post(orderbook_handler))
+        .route("/orderbook", post(orderbook_handler).get(get_orderbook_state))
         .route("/openpositions", get(get_all_positions))
         .route("/closeposition", post(handlecloseposition))
         .route("/getbalance", get(gethandlebalance))
+        .route("/me", get(get_me_handler))
         .layer(middleware::from_fn(auth_middleware));
     let app = Router::new()
         .route("/signup", post(signup_handler))
         .route("/login", post(login_handler))
+        .route("/candles", get(get_candles))
         .merge(protected_routes)
         .layer(Extension(tx))
+        .layer(Extension(pool))
         .layer(cors);
     // .route("/ws", any(handleliquidation))
 
@@ -166,6 +210,65 @@ async fn auth_middleware(
             next.run(req).await
         }
         Err(_) => (axum::http::StatusCode::UNAUTHORIZED, "invalid token").into_response(),
+    }
+}
+
+/// GET /me - returns the current authenticated user's info
+async fn get_me_handler(
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
+    Extension(auth): Extension<AuthUser>,
+) -> impl IntoResponse {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let send_result = tokio::task::spawn_blocking({
+        let userid = auth.userid.clone();
+        move || {
+            tx.send(Command::GetUser {
+                userid,
+                responder: resp_tx,
+            })
+        }
+    })
+    .await;
+
+    if send_result.is_err() {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to send command",
+        )
+            .into_response();
+    }
+    match resp_rx.await {
+        Ok(Ok(user)) => Json(user).into_response(),
+        Ok(Err(e)) => (axum::http::StatusCode::NOT_FOUND, e).into_response(),
+        Err(_) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "worker failed").into_response(),
+    }
+}
+
+/// GET /orderbook - returns a snapshot of the current orderbook
+async fn get_orderbook_state(
+    Extension(tx): Extension<std_mpsc::Sender<Command>>,
+    Extension(_auth): Extension<AuthUser>,
+) -> impl IntoResponse {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let send_result = tokio::task::spawn_blocking({
+        move || {
+            tx.send(Command::GetOrderbookState {
+                responder: resp_tx,
+            })
+        }
+    })
+    .await;
+
+    if send_result.is_err() {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to send command",
+        )
+            .into_response();
+    }
+    match resp_rx.await {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(_) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "worker failed").into_response(),
     }
 }
 
@@ -403,6 +506,41 @@ fn orderbook_thread(rx: std_mpsc::Receiver<Command>, trade_tx: tokio_mpsc::Sende
     let mut latestmarkprice: HashMap<String, Decimal> = HashMap::new();
     while let Ok(cmd) = rx.recv() {
         match cmd {
+            Command::GetUser { userid, responder } => {
+                if let Some(user) = users.getuser(&userid) {
+                    let _ = responder.send(Ok(user.clone()));
+                } else {
+                    let _ = responder.send(Err(String::from("user not found")));
+                }
+            }
+            Command::GetOrderbookState { responder } => {
+                // Aggregate bids: highest price first
+                let bids: Vec<PriceLevel> = orderbook
+                    .bid
+                    .iter()
+                    .rev()
+                    .map(|(price, orders)| {
+                        let total_qty: Decimal = orders.iter().map(|o| o.quantity).sum();
+                        PriceLevel {
+                            price: *price,
+                            quantity: total_qty,
+                        }
+                    })
+                    .collect();
+                // Aggregate asks: lowest price first
+                let asks: Vec<PriceLevel> = orderbook
+                    .ask
+                    .iter()
+                    .map(|(price, orders)| {
+                        let total_qty: Decimal = orders.iter().map(|o| o.quantity).sum();
+                        PriceLevel {
+                            price: *price,
+                            quantity: total_qty,
+                        }
+                    })
+                    .collect();
+                let _ = responder.send(OrderbookSnapshot { bids, asks });
+            }
             Command::Getbalance { userid, responder } => {
                 if let Some(user) = users.getusermut(&userid) {
                     let balance = user.balance;

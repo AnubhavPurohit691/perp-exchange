@@ -27,13 +27,13 @@ impl FromStr for Ordertype {
 
 #[derive(Debug)]
 pub struct Order {
-    price: Decimal,
-    symbol: String,
-    quantity: Decimal,
-    timestamp: DateTime<Utc>,
-    ordertype: Ordertype,
-    userid: String,
-    leverage: Decimal,
+    pub price: Decimal,
+    pub symbol: String,
+    pub quantity: Decimal,
+    pub timestamp: DateTime<Utc>,
+    pub ordertype: Ordertype,
+    pub userid: String,
+    pub leverage: Decimal,
 }
 impl Order {
     pub fn new(
@@ -59,8 +59,8 @@ impl Order {
 
 #[derive(Debug)]
 pub struct OrderBook {
-    bid: BTreeMap<Decimal, VecDeque<Order>>,
-    ask: BTreeMap<Decimal, VecDeque<Order>>,
+    pub bid: BTreeMap<Decimal, VecDeque<Order>>,
+    pub ask: BTreeMap<Decimal, VecDeque<Order>>,
 }
 
 impl OrderBook {

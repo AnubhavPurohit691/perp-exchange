@@ -10,5 +10,7 @@ pub mod jwt;
 pub use jwt::*;
 pub mod binancetype;
 pub use binancetype::*;
+pub mod candle;
+pub use candle::*;
 pub mod password;
 pub use password::*;
