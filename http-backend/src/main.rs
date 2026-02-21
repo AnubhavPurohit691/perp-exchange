@@ -18,7 +18,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
-use tower_http::cors::{Any, CorsLayer};
+use http::HeaderValue;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::{
     handlers::{get_candles, Redis, start_binance},
@@ -116,9 +117,11 @@ async fn main() {
 
     let redis = Redis::new("redis://127.0.0.1/");
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_headers(Any)
-        .allow_methods(Any);
+        .allow_origin(AllowOrigin::exact(
+            HeaderValue::from_static("https://perp-exchange-inky.vercel.app"),
+        ))
+        .allow_headers(tower_http::cors::Any)
+        .allow_methods(tower_http::cors::Any);
     let (tx, rx) = std_mpsc::channel::<Command>();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
